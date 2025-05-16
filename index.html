@@ -1,0 +1,219 @@
+<!DOCTYPE html> <!-- Dichiara che si tratta di un documento HTML5 -->
+<html lang="it"> <!-- Inizio del documento HTML, con lingua impostata su italiano -->
+<head>
+  <meta charset="UTF-8"> <!-- Imposta la codifica dei caratteri su UTF-8 -->
+
+  <title>Web BLE ESP32</title> <!-- Titolo della pagina che appare nella scheda del browser -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- Adatta la pagina ai dispositivi mobili -->
+
+  <style>
+    /* Inizio dello stile CSS */
+    body {
+      font-family: Arial, sans-serif; /* Font del testo */
+      padding: 20px; /* Spazio interno */
+      background: #f2f2f2; /* Colore di sfondo */
+      color: #333; /* Colore del testo */
+      max-width: 600px; /* Larghezza massima della pagina */
+      margin: auto; /* Centra la pagina */
+    }
+
+    h1 {
+      text-align: center; /* Centra il titolo */
+      color: #005fa3; /* Colore del titolo */
+    }
+
+    button {
+      padding: 10px 20px; /* Spaziatura interna del bottone */
+      margin: 5px; /* Spazio esterno */
+      font-size: 16px; /* Dimensione del testo */
+      border: none; /* Nessun bordo */
+      border-radius: 5px; /* Angoli arrotondati */
+      background: #007bff; /* Colore di sfondo */
+      color: white; /* Colore del testo */
+      cursor: pointer; /* Cursore a forma di mano */
+    }
+
+    button:hover {
+      background: #0056b3; /* Colore al passaggio del mouse */
+    }
+
+    input[type="number"] {
+      padding: 10px; /* Spaziatura interna */
+      font-size: 16px; /* Dimensione testo */
+      width: 60%; /* Larghezza del campo */
+      margin: 5px 0; /* Spazio sopra e sotto */
+    }
+
+    #status, #response {
+      margin-top: 20px; /* Spazio sopra */
+      font-weight: bold; /* Testo in grassetto */
+    }
+
+    #extraControls {
+      margin-top: 20px; /* Spazio sopra */
+    }
+
+    #commandHistory {
+      margin-top: 30px; /* Spazio sopra */
+      background: #fff; /* Sfondo bianco */
+      padding: 15px; /* Spazio interno */
+      border-radius: 8px; /* Angoli arrotondati */
+    }
+
+    #commandHistory ul {
+      list-style: none; /* Nessun punto elenco */
+      padding-left: 0; /* Nessun margine sinistro */
+    }
+
+    #commandHistory li {
+      border-bottom: 1px solid #ccc; /* Riga divisoria sotto ogni elemento */
+      padding: 5px 0; /* Spaziatura verticale */
+    }
+  </style>
+</head>
+
+<body> <!-- Inizio del corpo della pagina -->
+
+  <h1>Web BLE ESP32</h1> <!-- Titolo principale -->
+
+  <!-- Sezione pulsanti iniziali -->
+  <div id="initialCommands">
+    <button type="button" onclick="connect()">🔌 Connetti ESP32</button> <!-- Pulsante per la connessione -->
+    <button type="button" onclick="sendCommand('tara')">📏 Invia "tara"</button> <!-- Comando tara -->
+    <button type="button" onclick="sendCommand('calibrazione')">⚖️ Invia "calibrazione"</button> <!-- Comando calibrazione -->
+  </div>
+
+  <p id="status">Stato: ❌ Disconnesso</p> <!-- Mostra lo stato della connessione -->
+  <p id="response">Risposta:</p> <!-- Mostra la risposta ricevuta dal dispositivo -->
+
+  <div id="extraControls"></div> <!-- Controlli dinamici (Sì/No o input peso) -->
+
+  <!-- Storico dei comandi -->
+  <div id="commandHistory">
+    <h3>📋 Comandi Inviati</h3>
+    <ul id="historyList"></ul> <!-- Lista dei comandi salvati -->
+    <button type="button" onclick="clearHistory()" style="background: #dc3545;">🗑️ Cancella cronologia</button> <!-- Pulsante per pulire la cronologia -->
+  </div>
+
+  <!-- Inizio dello script JavaScript -->
+  <script>
+    let txChar, rxChar; // Variabili per caratteristiche BLE: TX (notifiche), RX (scrittura)
+
+    // Funzione per connettersi al dispositivo ESP32 via BLE
+    async function connect() {
+      try {
+        // Richiede un dispositivo con nome che inizia con "ESP32" e il servizio UART BLE
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: 'ESP32' }],
+          optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] // UUID del servizio UART
+        });
+
+        // Connessione GATT
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+
+        // Ottieni le caratteristiche TX (notifiche) e RX (scrittura)
+        txChar = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+        rxChar = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
+
+        // Avvia notifiche sulla caratteristica TX
+        await txChar.startNotifications();
+        txChar.addEventListener('characteristicvaluechanged', handleResponse); // Ascolta risposte
+
+        // Aggiorna lo stato della connessione
+        document.getElementById('status').innerText = "Stato: ✅ Connesso";
+      } catch (e) {
+        console.error("Errore di connessione:", e);
+        alert("Connessione fallita");
+      }
+    }
+
+    // Invia un comando all'ESP32
+    async function sendCommand(command) {
+      if (!rxChar) return alert("Non connesso");
+      const data = new TextEncoder().encode(command); // Codifica il testo in bytes
+      await rxChar.writeValue(data); // Scrive il comando via BLE
+      console.log("Inviato comando:", command);
+      saveCommand(command); // Salva il comando nello storico
+    }
+
+    // Gestione delle risposte ricevute dal dispositivo
+    function handleResponse(event) {
+      const response = new TextDecoder().decode(event.target.value); // Decodifica la risposta
+      document.getElementById('response').innerText = "Risposta: " + response;
+      console.log("ESP32 dice:", response);
+
+      const controls = document.getElementById('extraControls');
+      controls.innerHTML = ""; // Pulisce i controlli precedenti
+
+      if (response.toLowerCase() === "sei sicuro?") {
+        // Mostra pulsanti di conferma
+        controls.innerHTML = `
+          <button onclick="sendCommand('si')">✅ Si</button>
+          <button onclick="sendCommand('no')">❌ No</button>
+        `;
+        toggleInitialCommands(false); // Nasconde i comandi iniziali
+
+      } else if (response.toLowerCase() === "dammi il peso") {
+        // Mostra campo per inserire il peso
+        controls.innerHTML = `
+          <input type="number" id="pesoInput" placeholder="Inserisci peso in grammi...">
+          <button onclick="inviaPeso()">📤 Invia peso</button>
+        `;
+        toggleInitialCommands(false); // Nasconde i comandi iniziali
+
+      } else {
+        // Nessuna richiesta particolare
+        toggleInitialCommands(true);
+        controls.innerHTML = "";
+      }
+    }
+
+    // Invia il valore del peso come comando
+    function inviaPeso() {
+      const peso = document.getElementById("pesoInput").value;
+      if (!peso || isNaN(peso)) {
+        alert("Inserisci un numero valido");
+        return;
+      }
+      sendCommand(peso);
+    }
+
+    // Mostra o nasconde la sezione dei comandi iniziali
+    function toggleInitialCommands(show) {
+      document.getElementById("initialCommands").style.display = show ? "block" : "none";
+    }
+
+    // Salva il comando inviato nello storico (localStorage)
+    function saveCommand(cmd) {
+      let history = JSON.parse(localStorage.getItem("bleCommands")) || [];
+      history.push({ command: cmd, time: new Date().toLocaleString() });
+      localStorage.setItem("bleCommands", JSON.stringify(history));
+      renderHistory(); // Aggiorna la lista visiva
+    }
+
+    // Mostra lo storico dei comandi nella lista
+    function renderHistory() {
+      const list = document.getElementById("historyList");
+      list.innerHTML = ""; // Pulisce la lista
+      const history = JSON.parse(localStorage.getItem("bleCommands")) || [];
+
+      history.forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = `${item.time} - ${item.command}`;
+        list.appendChild(li);
+      });
+    }
+
+    // Cancella lo storico dei comandi
+    function clearHistory() {
+      localStorage.removeItem("bleCommands");
+      renderHistory(); // Aggiorna la lista (vuota)
+    }
+
+    // All'avvio della pagina, mostra lo storico
+    window.onload = renderHistory;
+  </script>
+</body>
+</html>
